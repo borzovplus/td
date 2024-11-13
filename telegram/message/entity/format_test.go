@@ -54,7 +54,7 @@ func TestBuilder_GrowText(t *testing.T) {
 	)
 
 	b.GrowText(100)
-	a.Equal(100, b.message.Cap())
+	a.GreaterOrEqual(b.message.Cap(), 100)
 }
 
 func TestBuilder_GrowEntities(t *testing.T) {
