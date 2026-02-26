@@ -26,6 +26,8 @@ type Exchanger struct {
 	log     *zap.Logger
 	timeout time.Duration
 	dc      int
+
+	tempExpiresIn int
 }
 
 // WithClock sets exchange flow clock.
@@ -49,6 +51,13 @@ func (e Exchanger) WithLogger(log *zap.Logger) Exchanger {
 // WithTimeout sets write/read deadline of every exchange request.
 func (e Exchanger) WithTimeout(timeout time.Duration) Exchanger {
 	e.timeout = timeout
+	return e
+}
+
+// WithTemporaryAuthKey enables temporary auth key generation and sets key
+// lifetime in seconds.
+func (e Exchanger) WithTemporaryAuthKey(expiresIn int) Exchanger {
+	e.tempExpiresIn = expiresIn
 	return e
 }
 
@@ -86,6 +95,8 @@ func (e Exchanger) Client(keys []PublicKey) ClientExchange {
 		log:  e.log,
 		keys: keys,
 		dc:   e.dc,
+
+		tempExpiresIn: e.tempExpiresIn,
 	}
 }
 

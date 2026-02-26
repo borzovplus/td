@@ -73,20 +73,32 @@ func (c *Conn) createAuthKey(ctx context.Context) error {
 		ce.Write(fields...)
 	}
 
-	r, err := exchange.NewExchanger(c.conn, c.dcID).
+	exchanger := exchange.NewExchanger(c.conn, c.dcID).
 		WithClock(c.clock).
 		WithLogger(c.log.Named("exchange")).
 		WithTimeout(c.exchangeTimeout).
-		WithRand(c.rand).
-		Client(c.rsaPublicKeys).Run(ctx)
+		WithRand(c.rand)
+	var (
+		result exchange.ClientExchangeResult
+		err    error
+	)
+	if c.useTempAuthKey && !c.permKey.Zero() {
+		expiresIn := int(c.tempKeyExpires.Seconds())
+		if expiresIn <= 0 {
+			expiresIn = 24 * 60 * 60
+		}
+		result, err = exchanger.WithTemporaryAuthKey(expiresIn).Client(c.rsaPublicKeys).Run(ctx)
+	} else {
+		result, err = exchanger.Client(c.rsaPublicKeys).Run(ctx)
+	}
 	if err != nil {
 		return err
 	}
 
 	c.sessionMux.Lock()
-	c.authKey = r.AuthKey
-	c.sessionID = r.SessionID
-	c.salt = r.ServerSalt
+	c.authKey = result.AuthKey
+	c.sessionID = result.SessionID
+	c.salt = result.ServerSalt
 	c.sessionMux.Unlock()
 
 	return nil

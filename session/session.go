@@ -93,6 +93,12 @@ type Data struct {
 	AuthKey   []byte
 	AuthKeyID []byte
 	Salt      int64
+	// Temporary auth key (tmp_auth_key) for PFS flow.
+	TempAuthKey []byte
+	// ID of temporary auth key.
+	TempAuthKeyID []byte
+	// Unix timestamp when TempAuthKey expires.
+	TempAuthExpiresAt int64
 }
 
 // Storage is secure persistent storage for client session.
@@ -118,7 +124,11 @@ type jsonData struct {
 	Data    Data
 }
 
-const latestVersion = 1
+const (
+	sessionVersion1 = 1
+	sessionVersion2 = 2
+	latestVersion   = sessionVersion2
+)
 
 // Load loads Data from Storage.
 func (l *Loader) Load(ctx context.Context) (*Data, error) {
@@ -134,7 +144,10 @@ func (l *Loader) Load(ctx context.Context) (*Data, error) {
 	if err := json.Unmarshal(buf, &v); err != nil {
 		return nil, errors.Wrap(err, "unmarshal")
 	}
-	if v.Version != latestVersion {
+	switch v.Version {
+	case sessionVersion1, sessionVersion2:
+		// Supported versions.
+	default:
 		// HACK(ernado): backward compatibility super shenanigan.
 		return nil, errors.Wrapf(ErrNotFound, "version mismatch (%d != %d)", v.Version, latestVersion)
 	}

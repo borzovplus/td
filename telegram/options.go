@@ -60,6 +60,11 @@ type Options struct {
 	// SessionStorage will be used to load and save session data.
 	// NB: Very sensitive data, save with care.
 	SessionStorage SessionStorage
+	// UseTempAuthKey enables temporary auth key flow (PFS) for accounts with
+	// existing permanent sessions.
+	UseTempAuthKey bool
+	// TempAuthKeyExpires controls temporary auth key lifetime.
+	TempAuthKeyExpires time.Duration
 	// UpdateHandler will be called on received update.
 	UpdateHandler UpdateHandler
 	// Middlewares list allows wrapping tg.Invoker. Can be useful for metrics,
@@ -159,6 +164,9 @@ func (opt *Options) setDefaults() {
 	}
 	if opt.OnTransfer == nil {
 		opt.OnTransfer = noopOnTransfer
+	}
+	if opt.UseTempAuthKey && opt.TempAuthKeyExpires <= 0 {
+		opt.TempAuthKeyExpires = 24 * time.Hour
 	}
 }
 

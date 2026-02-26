@@ -16,6 +16,8 @@ type ClientExchange struct {
 
 	keys []PublicKey
 	dc   int
+
+	tempExpiresIn int
 }
 
 // ClientExchangeResult contains client part of key exchange result.

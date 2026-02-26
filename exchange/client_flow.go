@@ -87,14 +87,28 @@ Loop:
 	}
 
 	var encryptedData []byte
-	pqInnerData := &mt.PQInnerDataDC{
-		Pq:          res.Pq,
-		Nonce:       nonce,
-		NewNonce:    newNonce,
-		ServerNonce: serverNonce,
-		P:           pBytes,
-		Q:           qBytes,
-		DC:          c.dc,
+	var pqInnerData mt.PQInnerDataClass
+	if c.tempExpiresIn > 0 {
+		pqInnerData = &mt.PQInnerDataTempDC{
+			Pq:          res.Pq,
+			Nonce:       nonce,
+			NewNonce:    newNonce,
+			ServerNonce: serverNonce,
+			P:           pBytes,
+			Q:           qBytes,
+			DC:          c.dc,
+			ExpiresIn:   c.tempExpiresIn,
+		}
+	} else {
+		pqInnerData = &mt.PQInnerDataDC{
+			Pq:          res.Pq,
+			Nonce:       nonce,
+			NewNonce:    newNonce,
+			ServerNonce: serverNonce,
+			P:           pBytes,
+			Q:           qBytes,
+			DC:          c.dc,
+		}
 	}
 	b.Reset()
 	if err := pqInnerData.Encode(b); err != nil {

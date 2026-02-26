@@ -72,6 +72,7 @@ type Conn struct {
 	authKey    crypto.AuthKey
 	salt       int64
 	sessionID  int64
+	permKey    crypto.AuthKey
 
 	// server salts fetched by getSalts.
 	salts salts.Salts
@@ -107,6 +108,8 @@ type Conn struct {
 	compressThreshold int
 	dialTimeout       time.Duration
 	exchangeTimeout   time.Duration
+	tempKeyExpires    time.Duration
+	useTempAuthKey    bool
 	saltFetchInterval time.Duration
 	getTimeout        func(req uint32) time.Duration
 	// Ensure Run once.
@@ -139,6 +142,7 @@ func New(dialer Dialer, opt Options) *Conn {
 
 		authKey: opt.Key,
 		salt:    opt.Salt,
+		permKey: opt.PermKey,
 
 		ping:         map[int64]chan struct{}{},
 		pingTimeout:  opt.PingTimeout,
@@ -150,6 +154,8 @@ func New(dialer Dialer, opt Options) *Conn {
 		compressThreshold: opt.CompressThreshold,
 		dialTimeout:       opt.DialTimeout,
 		exchangeTimeout:   opt.ExchangeTimeout,
+		tempKeyExpires:    opt.TempAuthKeyExpires,
+		useTempAuthKey:    opt.UseTempAuthKey,
 		saltFetchInterval: opt.SaltFetchInterval,
 		getTimeout:        opt.RequestTimeout,
 	}

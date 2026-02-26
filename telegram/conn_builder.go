@@ -78,6 +78,13 @@ func (c *Client) createConn(
 	onDead func(error),
 ) pool.Conn {
 	opts, s := c.session.Options(c.opts)
+	if c.useTempAuthKey {
+		if perm := c.permAuthKeyValue(); !perm.Zero() {
+			opts.UseTempAuthKey = true
+			opts.PermKey = perm
+			opts.TempAuthKeyExpires = c.tempAuthKeyExpire
+		}
+	}
 	opts.Logger = c.log.Named("conn").With(
 		zap.Int64("conn_id", id),
 		zap.Int("dc_id", s.DC),

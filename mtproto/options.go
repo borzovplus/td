@@ -71,8 +71,14 @@ type Options struct {
 	Types *tmap.Map
 	// Key that can be used to restore previous connection.
 	Key crypto.AuthKey
+	// Permanent auth key used to bind a temporary auth key.
+	PermKey crypto.AuthKey
 	// Salt from server that can be used to restore previous connection.
 	Salt int64
+	// UseTempAuthKey enables temporary auth key generation on key exchange.
+	UseTempAuthKey bool
+	// TempAuthKeyExpires controls temporary key lifetime.
+	TempAuthKeyExpires time.Duration
 
 	// Tracer for OTEL.
 	Tracer trace.Tracer
@@ -158,5 +164,8 @@ func (opt *Options) setDefaults() {
 	}
 	if opt.Cipher == nil {
 		opt.Cipher = crypto.NewClientCipher(opt.Random)
+	}
+	if opt.UseTempAuthKey && opt.TempAuthKeyExpires <= 0 {
+		opt.TempAuthKeyExpires = 24 * time.Hour
 	}
 }

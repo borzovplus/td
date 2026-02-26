@@ -18,7 +18,7 @@ import (
 	"github.com/gotd/td/transport"
 )
 
-func testExchange(rsaPad bool) func(t *testing.T) {
+func testExchange(tempAuthKey bool) func(t *testing.T) {
 	return func(t *testing.T) {
 		a := require.New(t)
 		log := zaptest.NewLogger(t)
@@ -39,11 +39,13 @@ func testExchange(rsaPad bool) func(t *testing.T) {
 
 		g := tdsync.NewCancellableGroup(ctx)
 		g.Go(func(ctx context.Context) error {
-			_, err := NewExchanger(client, dc).
+			clientExchanger := NewExchanger(client, dc).
 				WithLogger(log.Named("client")).
-				WithRand(reader).
-				Client([]PublicKey{privateKey.Public()}).
-				Run(ctx)
+				WithRand(reader)
+			if tempAuthKey {
+				clientExchanger = clientExchanger.WithTemporaryAuthKey(24 * 60 * 60)
+			}
+			_, err := clientExchanger.Client([]PublicKey{privateKey.Public()}).Run(ctx)
 			return err
 		})
 
@@ -62,7 +64,7 @@ func testExchange(rsaPad bool) func(t *testing.T) {
 
 func TestExchange(t *testing.T) {
 	t.Run("PQInnerData", testExchange(false))
-	t.Run("PQInnerDataDC", testExchange(true))
+	t.Run("PQInnerDataTempDC", testExchange(true))
 }
 
 func TestExchangeCorpus(t *testing.T) {

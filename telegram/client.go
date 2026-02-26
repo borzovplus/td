@@ -13,6 +13,7 @@ import (
 
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/clock"
+	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/mtproto"
 	"github.com/gotd/td/oteltg"
 	"github.com/gotd/td/pool"
@@ -120,6 +121,12 @@ type Client struct {
 	// Session storage.
 	storage clientStorage // immutable, nillable
 
+	useTempAuthKey    bool // immutable
+	tempAuthKeyExpire time.Duration
+	tempAuthMux       sync.RWMutex
+	permAuthKey       crypto.AuthKey
+	boundTempAuthKey  [8]byte
+
 	// Ready signal channel, sends signal when client connection is ready.
 	// Resets on reconnect.
 	ready *tdsync.ResetReady // immutable
@@ -164,19 +171,21 @@ func NewClient(appID int, appHash string, opt Options) *Client {
 		cfg: manager.NewAtomicConfig(tg.Config{
 			DCOptions: opt.DCList.Options,
 		}),
-		create:           defaultConstructor(),
-		resolver:         opt.Resolver,
-		defaultMode:      mode,
-		newConnBackoff:   opt.ReconnectionBackoff,
-		onDead:           opt.OnDead,
-		clock:            opt.Clock,
-		device:           opt.Device,
-		migrationTimeout: opt.MigrationTimeout,
-		noUpdatesMode:    opt.NoUpdates,
-		mw:               opt.Middlewares,
-		onTransfer:       opt.OnTransfer,
-		onSelfError:      opt.OnSelfError,
-		onSelfSuccess:    opt.OnSelfSuccess,
+		create:            defaultConstructor(),
+		resolver:          opt.Resolver,
+		defaultMode:       mode,
+		newConnBackoff:    opt.ReconnectionBackoff,
+		onDead:            opt.OnDead,
+		clock:             opt.Clock,
+		device:            opt.Device,
+		migrationTimeout:  opt.MigrationTimeout,
+		noUpdatesMode:     opt.NoUpdates,
+		mw:                opt.Middlewares,
+		onTransfer:        opt.OnTransfer,
+		onSelfError:       opt.OnSelfError,
+		onSelfSuccess:     opt.OnSelfSuccess,
+		useTempAuthKey:    opt.UseTempAuthKey,
+		tempAuthKeyExpire: opt.TempAuthKeyExpires,
 	}
 	if opt.TracerProvider != nil {
 		client.tracer = opt.TracerProvider.Tracer(oteltg.Name)
@@ -195,18 +204,20 @@ func NewClient(appID int, appHash string, opt Options) *Client {
 	}
 
 	client.opts = mtproto.Options{
-		PublicKeys:        opt.PublicKeys,
-		Random:            opt.Random,
-		Logger:            opt.Logger,
-		AckBatchSize:      opt.AckBatchSize,
-		AckInterval:       opt.AckInterval,
-		RetryInterval:     opt.RetryInterval,
-		MaxRetries:        opt.MaxRetries,
-		CompressThreshold: opt.CompressThreshold,
-		MessageID:         opt.MessageID,
-		ExchangeTimeout:   opt.ExchangeTimeout,
-		DialTimeout:       opt.DialTimeout,
-		Clock:             opt.Clock,
+		PublicKeys:         opt.PublicKeys,
+		Random:             opt.Random,
+		Logger:             opt.Logger,
+		AckBatchSize:       opt.AckBatchSize,
+		AckInterval:        opt.AckInterval,
+		RetryInterval:      opt.RetryInterval,
+		MaxRetries:         opt.MaxRetries,
+		CompressThreshold:  opt.CompressThreshold,
+		MessageID:          opt.MessageID,
+		ExchangeTimeout:    opt.ExchangeTimeout,
+		DialTimeout:        opt.DialTimeout,
+		Clock:              opt.Clock,
+		UseTempAuthKey:     opt.UseTempAuthKey,
+		TempAuthKeyExpires: opt.TempAuthKeyExpires,
 
 		Types: getTypesMapping(),
 
