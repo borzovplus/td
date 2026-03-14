@@ -27,7 +27,7 @@ func Test_cdn_decrypt(t *testing.T) {
 					EncryptionIv:  test.iv,
 				},
 			}
-			_, err := c.decrypt(testdata, 0)
+			_, err := c.decrypt(testdata, 0, c.redirect)
 			if test.err {
 				require.Error(t, err)
 			}

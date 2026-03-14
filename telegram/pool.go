@@ -56,7 +56,13 @@ func (c *Client) Pool(max int64) (CloseInvoker, error) {
 	})
 }
 
-func (c *Client) dc(ctx context.Context, dcID int, max int64, dialer mtproto.Dialer) (*pool.DC, error) {
+func (c *Client) dc(
+	ctx context.Context,
+	dcID int,
+	max int64,
+	dialer mtproto.Dialer,
+	mode manager.ConnMode,
+) (*pool.DC, error) {
 	if max < 0 {
 		return nil, errors.Errorf("invalid max value %d", max)
 	}
@@ -72,6 +78,14 @@ func (c *Client) dc(ctx context.Context, dcID int, max int64, dialer mtproto.Dia
 	)
 
 	opts := c.opts
+	if mode == manager.ConnModeCDN {
+		cdnKeys, err := c.fetchCDNKeys(ctx)
+		if err != nil {
+			c.log.Warn("Unable to fetch CDN public keys, using bundled keys", zap.Error(err))
+		} else {
+			opts.PublicKeys = mergePublicKeys(opts.PublicKeys, cdnKeys)
+		}
+	}
 	// suppressSetup temporarily disables per-connection transfer hook while
 	// explicit first transfer below is running, avoiding duplicate import.
 	var suppressSetup atomic.Bool
@@ -88,7 +102,10 @@ func (c *Client) dc(ctx context.Context, dcID int, max int64, dialer mtproto.Dia
 
 		options, data := session.Options(opts)
 		setup := manager.SetupCallback(nil)
-		if data.AuthKey.Zero() && c.session.Load().DC != dcID && !suppressSetup.Load() {
+		if mode != manager.ConnModeCDN &&
+			data.AuthKey.Zero() &&
+			c.session.Load().DC != dcID &&
+			!suppressSetup.Load() {
 			// Non-main DC key must be authorized via auth.export/import after
 			// local key generation.
 			setup = c.dcTransferSetup(dcID)
@@ -98,7 +115,7 @@ func (c *Client) dc(ctx context.Context, dcID int, max int64, dialer mtproto.Dia
 			zap.Int("dc_id", dcID),
 		)
 		return c.create(
-			dialer, manager.ConnModeData, c.appID,
+			dialer, mode, c.appID,
 			options, manager.ConnOptions{
 				DC:      dcID,
 				Device:  c.device,
@@ -112,6 +129,10 @@ func (c *Client) dc(ctx context.Context, dcID int, max int64, dialer mtproto.Dia
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "create pool")
+	}
+
+	if mode == manager.ConnModeCDN {
+		return p, nil
 	}
 
 	// First transfer is done explicitly to preserve old behavior: return
@@ -136,7 +157,7 @@ func (c *Client) dc(ctx context.Context, dcID int, max int64, dialer mtproto.Dia
 
 // DC creates new multi-connection invoker to given DC.
 func (c *Client) DC(ctx context.Context, dc int, max int64) (CloseInvoker, error) {
-	return c.dc(ctx, dc, max, c.primaryDC(dc))
+	return c.dc(ctx, dc, max, c.primaryDC(dc), manager.ConnModeData)
 }
 
 // MediaOnly creates new multi-connection invoker to given DC ID.
@@ -144,5 +165,13 @@ func (c *Client) DC(ctx context.Context, dc int, max int64) (CloseInvoker, error
 func (c *Client) MediaOnly(ctx context.Context, dc int, max int64) (CloseInvoker, error) {
 	return c.dc(ctx, dc, max, func(ctx context.Context) (transport.Conn, error) {
 		return c.resolver.MediaOnly(ctx, dc, c.dcList())
-	})
+	}, manager.ConnModeData)
+}
+
+// CDN creates new multi-connection invoker to given CDN DC ID.
+// It connects to CDN DCs.
+func (c *Client) CDN(ctx context.Context, dc int, max int64) (CloseInvoker, error) {
+	return c.dc(ctx, dc, max, func(ctx context.Context) (transport.Conn, error) {
+		return c.resolver.CDN(ctx, dc, c.dcList())
+	}, manager.ConnModeCDN)
 }

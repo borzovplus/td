@@ -10,6 +10,7 @@ import (
 	"io"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-faster/errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/gotd/td/syncio"
 	"github.com/gotd/td/testutil"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 type mock struct {
@@ -28,11 +30,16 @@ type mock struct {
 	err       bool
 	hashesErr bool
 	redirect  *tg.UploadFileCDNRedirect
+
+	migrateOnce    atomic.Bool
+	reuploadNeeded atomic.Bool
+	tokenInvalid   atomic.Bool
+	getFileCalls   atomic.Int32
 }
 
 var testErr = testutil.TestError()
 
-func (m mock) getPart(offset int64, limit int) []byte {
+func (m *mock) getPart(offset int64, limit int) []byte {
 	length := len(m.data)
 	if offset >= int64(length) {
 		return []byte{}
@@ -48,12 +55,17 @@ func (m mock) getPart(offset int64, limit int) []byte {
 	return r
 }
 
-func (m mock) UploadGetFile(ctx context.Context, request *tg.UploadGetFileRequest) (tg.UploadFileClass, error) {
+func (m *mock) UploadGetFile(ctx context.Context, request *tg.UploadGetFileRequest) (tg.UploadFileClass, error) {
+	m.getFileCalls.Add(1)
 	if m.err {
 		return nil, testErr
 	}
 
-	if m.migrate {
+	if request.GetCDNSupported() && m.migrateOnce.CompareAndSwap(true, false) {
+		return m.redirect, nil
+	}
+
+	if request.GetCDNSupported() && m.migrate {
 		return m.redirect, nil
 	}
 
@@ -62,7 +74,7 @@ func (m mock) UploadGetFile(ctx context.Context, request *tg.UploadGetFileReques
 	}, nil
 }
 
-func (m mock) UploadGetFileHashes(ctx context.Context, request *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error) {
+func (m *mock) UploadGetFileHashes(ctx context.Context, request *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error) {
 	if m.hashesErr {
 		return nil, testErr
 	}
@@ -70,16 +82,24 @@ func (m mock) UploadGetFileHashes(ctx context.Context, request *tg.UploadGetFile
 	return m.hashes.Hashes(ctx, request.Offset)
 }
 
-func (m mock) UploadReuploadCDNFile(ctx context.Context, request *tg.UploadReuploadCDNFileRequest) ([]tg.FileHash, error) {
-	panic("implement me")
-}
-
-func (m mock) UploadGetCDNFile(ctx context.Context, request *tg.UploadGetCDNFileRequest) (tg.UploadCDNFileClass, error) {
+func (m *mock) UploadReuploadCDNFile(ctx context.Context, request *tg.UploadReuploadCDNFileRequest) ([]tg.FileHash, error) {
 	if m.err {
 		return nil, testErr
 	}
 
-	if m.migrate {
+	return nil, nil
+}
+
+func (m *mock) UploadGetCDNFile(ctx context.Context, request *tg.UploadGetCDNFileRequest) (tg.UploadCDNFileClass, error) {
+	if m.err {
+		return nil, testErr
+	}
+
+	if m.tokenInvalid.CompareAndSwap(true, false) {
+		return nil, tgerr.New(400, "FILE_TOKEN_INVALID")
+	}
+
+	if m.reuploadNeeded.CompareAndSwap(true, false) {
 		return &tg.UploadCDNFileReuploadNeeded{
 			RequestToken: []byte{1, 2, 3},
 		}, nil
@@ -102,7 +122,7 @@ func (m mock) UploadGetCDNFile(ctx context.Context, request *tg.UploadGetCDNFile
 	}, nil
 }
 
-func (m mock) UploadGetCDNFileHashes(ctx context.Context, request *tg.UploadGetCDNFileHashesRequest) ([]tg.FileHash, error) {
+func (m *mock) UploadGetCDNFileHashes(ctx context.Context, request *tg.UploadGetCDNFileHashesRequest) ([]tg.FileHash, error) {
 	if m.hashesErr {
 		return nil, testErr
 	}
@@ -110,7 +130,7 @@ func (m mock) UploadGetCDNFileHashes(ctx context.Context, request *tg.UploadGetC
 	return m.hashes.Hashes(ctx, request.Offset)
 }
 
-func (m mock) UploadGetWebFile(ctx context.Context, request *tg.UploadGetWebFileRequest) (*tg.UploadWebFile, error) {
+func (m *mock) UploadGetWebFile(ctx context.Context, request *tg.UploadGetWebFileRequest) (*tg.UploadWebFile, error) {
 	if m.err {
 		return nil, testErr
 	}
@@ -118,6 +138,57 @@ func (m mock) UploadGetWebFile(ctx context.Context, request *tg.UploadGetWebFile
 	return &tg.UploadWebFile{
 		Bytes: m.getPart(int64(request.Offset), request.Limit),
 	}, nil
+}
+
+type noopCloser struct{}
+
+func (noopCloser) Close() error {
+	return nil
+}
+
+func (m *mock) CDN(ctx context.Context, dc int, max int64) (CDN, io.Closer, error) {
+	return m, noopCloser{}, nil
+}
+
+type noCDNClient struct {
+	base *mock
+}
+
+func (c *noCDNClient) UploadGetFile(ctx context.Context, request *tg.UploadGetFileRequest) (tg.UploadFileClass, error) {
+	return c.base.UploadGetFile(ctx, request)
+}
+
+func (c *noCDNClient) UploadGetFileHashes(ctx context.Context, request *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error) {
+	return c.base.UploadGetFileHashes(ctx, request)
+}
+
+func (c *noCDNClient) UploadReuploadCDNFile(ctx context.Context, request *tg.UploadReuploadCDNFileRequest) ([]tg.FileHash, error) {
+	return c.base.UploadReuploadCDNFile(ctx, request)
+}
+
+func (c *noCDNClient) UploadGetCDNFileHashes(ctx context.Context, request *tg.UploadGetCDNFileHashesRequest) ([]tg.FileHash, error) {
+	return c.base.UploadGetCDNFileHashes(ctx, request)
+}
+
+func (c *noCDNClient) UploadGetWebFile(ctx context.Context, request *tg.UploadGetWebFileRequest) (*tg.UploadWebFile, error) {
+	return c.base.UploadGetWebFile(ctx, request)
+}
+
+type nilCDNProvider struct {
+	*mock
+}
+
+func (c *nilCDNProvider) CDN(ctx context.Context, dc int, max int64) (CDN, io.Closer, error) {
+	return nil, noopCloser{}, nil
+}
+
+type errCDNProvider struct {
+	*mock
+	err error
+}
+
+func (c *errCDNProvider) CDN(ctx context.Context, dc int, max int64) (CDN, io.Closer, error) {
+	return nil, nil, c.err
 }
 
 func countHashes(data []byte, partSize int) (r [][]tg.FileHash) {
@@ -194,26 +265,30 @@ func TestDownloader(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		data      []byte
-		migrate   bool
-		err       bool
-		hashesErr bool
+		name        string
+		data        []byte
+		migrate     bool
+		cdnReupload bool
+		cdnTokenErr bool
+		err         bool
+		hashesErr   bool
 	}{
-		{"5b", []byte{1, 2, 3, 4, 5}, false, false, false},
-		{strconv.Itoa(len(testData)) + "b", testData, false, false, false},
-		{"Error", []byte{}, false, true, false},
-		{"HashesError", []byte{}, false, true, true},
-		{"Migrate", []byte{}, true, false, false},
+		{"5b", []byte{1, 2, 3, 4, 5}, false, false, false, false, false},
+		{strconv.Itoa(len(testData)) + "b", testData, false, false, false, false, false},
+		{"Error", []byte{}, false, false, false, true, false},
+		{"HashesError", testData, false, false, false, false, true},
+		{"Migrate", testData, true, false, false, false, false},
+		{"MigrateReupload", testData, true, true, false, false, false},
+		{"MigrateTokenInvalid", testData, true, false, true, false, false},
 	}
 	schemas := []struct {
 		name    string
-		creator func(c Client, cdn CDN) *Builder
+		creator func(c Client) *Builder
 	}{
-		{"Master", func(c Client, cdn CDN) *Builder {
+		{"Master", func(c Client) *Builder {
 			return NewDownloader().Download(c, nil)
 		}},
-		{"Web", func(c Client, cdn CDN) *Builder {
+		{"Web", func(c Client) *Builder {
 			return NewDownloader().Web(c, nil)
 		}},
 	}
@@ -272,20 +347,25 @@ func TestDownloader(t *testing.T) {
 										hashes: mockHashes{
 											ranges: countHashes(test.data, 128*1024),
 										},
-										migrate:  test.migrate,
-										err:      test.err,
-										redirect: redirect,
+										migrate:   test.migrate,
+										err:       test.err,
+										hashesErr: test.hashesErr,
+										redirect:  redirect,
+									}
+									if test.cdnReupload {
+										client.reuploadNeeded.Store(true)
+									}
+									if test.cdnTokenErr {
+										client.tokenInvalid.Store(true)
 									}
 
-									b := schema.creator(client, client)
+									b := schema.creator(client)
 									b = option.action(b)
 									data, err := way.action(b)
-									switch {
-									case test.migrate:
+									shouldErr := test.err || (test.hashesErr && option.name == "Verify")
+									if shouldErr {
 										a.Error(err)
-									case test.err:
-										a.Error(err)
-									default:
+									} else {
 										a.NoError(err)
 										a.True(bytes.Equal(test.data, data))
 									}
@@ -297,4 +377,109 @@ func TestDownloader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDownloader_CDNFallbackWithoutProvider(t *testing.T) {
+	ctx := context.Background()
+	data := []byte("fallback-without-cdn-provider")
+
+	key := make([]byte, 32)
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		t.Fatal(err)
+	}
+
+	redirect := &tg.UploadFileCDNRedirect{
+		DCID:          203,
+		FileToken:     []byte{10},
+		EncryptionKey: key,
+		EncryptionIv:  iv,
+	}
+
+	t.Run("NoProvider", func(t *testing.T) {
+		m := &mock{
+			data:    data,
+			migrate: true,
+			hashes: mockHashes{
+				ranges: countHashes(data, 128*1024),
+			},
+			redirect: redirect,
+		}
+		output := new(bytes.Buffer)
+		_, err := NewDownloader().Download(&noCDNClient{base: m}, nil).WithVerify(true).Stream(ctx, output)
+		require.NoError(t, err)
+		require.Equal(t, data, output.Bytes())
+		require.EqualValues(t, 1, m.getFileCalls.Load())
+	})
+
+	t.Run("NilProvider", func(t *testing.T) {
+		m := &mock{
+			data:    data,
+			migrate: true,
+			hashes: mockHashes{
+				ranges: countHashes(data, 128*1024),
+			},
+			redirect: redirect,
+		}
+		output := new(bytes.Buffer)
+		_, err := NewDownloader().Download(&nilCDNProvider{mock: m}, nil).WithVerify(true).Stream(ctx, output)
+		require.NoError(t, err)
+		require.Equal(t, data, output.Bytes())
+	})
+
+	t.Run("ProviderErrorFallback", func(t *testing.T) {
+		m := &mock{
+			data:    data,
+			migrate: true,
+			hashes: mockHashes{
+				ranges: countHashes(data, 128*1024),
+			},
+			redirect: redirect,
+		}
+		output := new(bytes.Buffer)
+		_, err := NewDownloader().Download(&errCDNProvider{
+			mock: m,
+			err:  testErr,
+		}, nil).WithVerify(true).Stream(ctx, output)
+		require.NoError(t, err)
+		require.Equal(t, data, output.Bytes())
+	})
+
+	t.Run("ProviderContextError", func(t *testing.T) {
+		m := &mock{
+			data:    data,
+			migrate: true,
+			hashes: mockHashes{
+				ranges: countHashes(data, 128*1024),
+			},
+			redirect: redirect,
+		}
+		output := new(bytes.Buffer)
+		_, err := NewDownloader().Download(&errCDNProvider{
+			mock: m,
+			err:  context.Canceled,
+		}, nil).WithVerify(true).Stream(ctx, output)
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("TokenInvalidFallbackToMaster", func(t *testing.T) {
+		m := &mock{
+			data: data,
+			hashes: mockHashes{
+				ranges: countHashes(data, 128*1024),
+			},
+			redirect: redirect,
+		}
+		m.migrateOnce.Store(true)
+		m.tokenInvalid.Store(true)
+
+		output := new(bytes.Buffer)
+		_, err := NewDownloader().Download(m, nil).WithVerify(true).Stream(ctx, output)
+		require.NoError(t, err)
+		require.Equal(t, data, output.Bytes())
+	})
 }
